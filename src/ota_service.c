@@ -13,6 +13,7 @@
 #include "dice_cert.h"
 
 #include "esp_ota_ops.h"
+#include "esp_http_server.h"
 
 #define KB 1024
 #define STACK_SIZE (32 * KB)
@@ -131,12 +132,63 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 
 void ota_service_task(void *pvParameters);
 
-void ota_service_begin(char *server_ip) {
+httpd_handle_t web_serv;
+char *ota_server_ip;
+
+esp_err_t get_handler(httpd_req_t *req) {
+	const char resp[] = "Received update request: About to update\n";
+	httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+	
 	xTaskCreate(ota_service_task, "OTA Service Task",
-		    STACK_SIZE, (void *) server_ip, 1, NULL);
+		    STACK_SIZE, (void *) ota_server_ip, 1,
+		    NULL);
+
+	return ESP_OK;
+}
+
+httpd_uri_t uri_get = {
+    .uri      = "/update",
+    .method   = HTTP_GET,
+    .handler  = get_handler,
+    .user_ctx = NULL
+};
+
+httpd_handle_t start_webserver(void)
+{
+    /* Generate default configuration */
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    /* Empty handle to esp_http_server */
+    httpd_handle_t server = NULL;
+
+    /* Start the httpd server */
+    if (httpd_start(&server, &config) == ESP_OK)
+        httpd_register_uri_handler(server, &uri_get);
+	
+    web_serv = server;
+    return server;
+}
+
+void stop_webserver(httpd_handle_t server)
+{
+    if (server)
+        httpd_stop(server);
+}
+
+
+void ota_service_begin(char *server_ip) {
+	ota_server_ip = strdup(server_ip);
+
+	httpd_handle_t server = start_webserver();
+	if (server)
+		return;
+
+	ESP_LOGE(TAG, "Could not start the server - Going down");
+	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
 void ota_service_task(void *pvParameters) {
+	stop_webserver(web_serv);
 restart:
 	;
 	char *server_ip = (char *) pvParameters;
