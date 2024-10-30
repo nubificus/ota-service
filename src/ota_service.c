@@ -108,6 +108,7 @@ static int ota_setup_partition_and_reboot() {
 }
 
 static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
+	ESP_LOGI(TAG, "Waiting for update..");
 	const int chunk = 64; 
 	unsigned char rx_buffer[chunk];
 	int len;
@@ -239,13 +240,6 @@ reconnect:
 
 	ota_process_begin();	
 
-	if (update_wait(&ssl)) {
-		ESP_LOGI(TAG, "Received update Request - About to receive data");
-	} else {
-		ESP_LOGE(TAG, "Waiting from server's update request failed");
-		goto restart;
-	}
-	
 	if (ota_write_partition_from_tls_stream(&ssl) < 0) {
 		ESP_LOGE(TAG, "Failed to update");
 		goto restart;
