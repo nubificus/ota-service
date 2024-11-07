@@ -134,24 +134,50 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 void ota_service_task(void *pvParameters);
 
 httpd_handle_t web_serv;
-char *ota_server_ip;
 
-esp_err_t get_handler(httpd_req_t *req) {
+/*
+ * The body in the receiving POST
+ * request will have the following
+ * form: `ip: X.X.X.X`
+ * Therefore we extract the ip string
+ * from the body to give it as an
+ * argument to the ota-service task
+ */
+
+#define IP_LEN 16 + 1
+#define POST_BODY_LEN (IP_LEN + 4)
+esp_err_t post_handler(httpd_req_t *req)
+{
+	char body[POST_BODY_LEN] = { 0 };
+	size_t msg_len = req->content_len;
+	size_t buf_len = POST_BODY_LEN;
+	size_t recv_size = (msg_len < buf_len) ? msg_len : buf_len;
+
+	int ret = httpd_req_recv(req, body, recv_size);
+	if (ret <= 0) {
+		if (ret == HTTPD_SOCK_ERR_TIMEOUT)
+			httpd_resp_send_408(req);
+		return ESP_FAIL;
+	}
+
+	char* ip = calloc(IP_LEN, 1);
+	sscanf(body, "ip: %s", ip);
+	ESP_LOGI(TAG, "OTA Agent IP: %s", ip);
 	const char resp[] = "Received update request: About to update\n";
 	httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-	
-	xTaskCreate(ota_service_task, "OTA Service Task",
-		    STACK_SIZE, (void *) ota_server_ip, 1,
-		    NULL);
-
+	xTaskCreate(ota_service_task,
+		    "OTA Service Task",
+		    STACK_SIZE,
+		    (void *) ip,
+		    1, NULL);
 	return ESP_OK;
 }
 
-httpd_uri_t uri_get = {
-    .uri      = "/update",
-    .method   = HTTP_GET,
-    .handler  = get_handler,
-    .user_ctx = NULL
+httpd_uri_t uri_post = {
+	.uri      = "/update",
+	.method   = HTTP_POST,
+	.handler  = post_handler,
+	.user_ctx = NULL
 };
 
 httpd_handle_t start_webserver(void)
@@ -164,8 +190,7 @@ httpd_handle_t start_webserver(void)
 
     /* Start the httpd server */
     if (httpd_start(&server, &config) == ESP_OK)
-        httpd_register_uri_handler(server, &uri_get);
-	
+	httpd_register_uri_handler(server, &uri_post);
     web_serv = server;
     return server;
 }
@@ -177,9 +202,7 @@ void stop_webserver(httpd_handle_t server)
 }
 
 
-void ota_service_begin(char *server_ip) {
-	ota_server_ip = strdup(server_ip);
-
+void ota_service_begin() {
 	httpd_handle_t server = start_webserver();
 	if (server)
 		return;
@@ -197,8 +220,6 @@ restart:
 	uint8_t reconnect = 0;
 	uint8_t attempts = 0;
 
-	printf("Server IP: %s\n", server_ip);
-	
 	char cert_buf[1000] = {0};
 	int len = gen_dice_cert(cert_buf, sizeof(cert_buf));
 	if (len <= 0) {
@@ -221,8 +242,9 @@ reconnect:
 	reconnect = 1;
 
 	if (tls_establish(&ssl, server_ip) < 0)
-		goto reconnect;	
-	
+		goto reconnect;
+
+	free(server_ip);
 	printf("Established connection with server\n");
 
 	if (tls_send_dice_cert(&ssl, (void *) cert_buf, len) < 0) {
@@ -238,6 +260,7 @@ reconnect:
 		goto out;
 	}
 
+	vTaskDelay(1000 / portTICK_PERIOD_MS);
 	ota_process_begin();	
 
 	if (ota_write_partition_from_tls_stream(&ssl) < 0) {
