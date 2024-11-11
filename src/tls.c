@@ -152,14 +152,13 @@ void tls_kill_connection(mbedtls_ssl_context *ssl) {
 }
 
 int cert_ok(mbedtls_ssl_context *ssl) {
-	unsigned char buf[32] = {0};
-	int ret = mbedtls_ssl_read(ssl, buf, sizeof(buf) - 1);
+	unsigned char status;
+	int ret = mbedtls_ssl_read(ssl, &status, 1);
 	if (ret < 0) {
 		ESP_LOGE(TAG, "Failed to read response from server");
 		return 0;
 	}
-	printf("Server's Response: %s\n", buf + 2);
-	return atoi((char*) buf);
+	return status - '0';
 }
 
 
