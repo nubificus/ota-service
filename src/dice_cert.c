@@ -29,10 +29,13 @@
 
 #include "dice_cert.h"
 
-#define BOOTLOADER_HASH_OFFSET 0x1000
-#define BOOTLOADER_HASH_SIZE 64
+#define BOOTLOADER_HASH_OFFSET 0x80
+#define BOOTLOADER_HASH_SIZE   64
 
-#define BOOTLOADER_LEN 128
+#define APP_HASH_OFFSET 0x200b0
+#define APP_HASH_SIZE   16
+
+#define DEBUG 1
 
 static const char *TAG = "dice-cert-gen";
 
@@ -76,24 +79,15 @@ int gen_dice_cert(void *buf, size_t max_len) {
 		vTaskDelay(1000 / portTICK_PERIOD_MS);
 	}
 	esp_flash_read(NULL, input_values.code_hash, BOOTLOADER_HASH_OFFSET, BOOTLOADER_HASH_SIZE);
-	ESP_LOGI(TAG, "Using bootloader hash");
 
 	#if DEBUG
+	printf("\nBootloader hash (%d bytes from 0x%02x):\n",
+			BOOTLOADER_HASH_SIZE,
+			BOOTLOADER_HASH_OFFSET);
 	for (i = 0; i < 64; i++) {
 		printf("%02x:", input_values.code_hash[i]);
 	}
-	printf("\n");
-	#endif
-
-	uint8_t bytes[BOOTLOADER_LEN] = {0};
-	esp_flash_read(NULL, bytes, BOOTLOADER_HASH_OFFSET, BOOTLOADER_LEN);
-
-	#if DEBUG
-	ESP_LOGI(TAG, "Using bootloader hash");
-	for (i = 0; i < BOOTLOADER_LEN; i++) {
-		printf("%02x:", bytes[i]);
-	}
-	printf("\n");
+	printf("\n\n");
 	#endif
 
 	if (esp_efuse_mac_get_default(input_values.config_value)) {
@@ -102,10 +96,10 @@ int gen_dice_cert(void *buf, size_t max_len) {
 	}
 
 	#if DEBUG
-	printf("Using MAC: ");
+	printf("MAC: ");
 	for (i = 0; i < 6; i++)
 		printf("%02x:", input_values.config_value[i]);
-	printf("\n");
+	printf("\n\n");
 	#endif
 
 	input_values.mode = kDiceModeNormal;
@@ -117,22 +111,24 @@ int gen_dice_cert(void *buf, size_t max_len) {
 		ESP_LOGE(TAG, "DICE first CDI failed!");
 		goto fail;
 	}
-	ESP_LOGI(TAG, "First CDI buffer created");
 
 	#if DEBUG
+	printf("First CDI buffer created:\n");
 	for (i = 0; i < DICE_CDI_SIZE; i++)
 		printf("%x:", cdi_buffer[i]);
-	printf("\n");
+	printf("\n\n");
 	#endif
 
 	memset(input_values.code_hash, 0, sizeof(input_values.code_hash));
-	esp_flash_read(NULL, input_values.code_hash, 0x20000, 16);
-	ESP_LOGI(TAG, "Using application hash");
-
+	esp_flash_read(NULL, input_values.code_hash, APP_HASH_OFFSET, APP_HASH_SIZE);
+	
 	#if DEBUG
-	for (i = 0; i < 64; i++)
+	printf("Application hash (%d bytes from 0x%02x):\n",
+			APP_HASH_SIZE,
+			APP_HASH_OFFSET);
+	for (i = 0; i < APP_HASH_SIZE; i++)
 		printf("%02x:", input_values.code_hash[i]);
-	printf("\n");
+	printf("\n\n");
 	#endif
 
 	input_values.mode = kDiceModeNormal;
