@@ -133,8 +133,6 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 
 void ota_service_task(void *pvParameters);
 
-httpd_handle_t web_serv;
-
 /*
  * The body in the receiving POST
  * request will have the following
@@ -146,7 +144,7 @@ httpd_handle_t web_serv;
 
 #define IP_LEN 16 + 1
 #define POST_BODY_LEN (IP_LEN + 4)
-esp_err_t post_handler(httpd_req_t *req)
+esp_err_t ota_request_handler(httpd_req_t *req)
 {
 	char body[POST_BODY_LEN] = { 0 };
 	size_t msg_len = req->content_len;
@@ -173,46 +171,15 @@ esp_err_t post_handler(httpd_req_t *req)
 	return ESP_OK;
 }
 
-httpd_uri_t uri_post = {
-	.uri      = "/update",
-	.method   = HTTP_POST,
-	.handler  = post_handler,
-	.user_ctx = NULL
-};
-
-httpd_handle_t start_webserver(void)
-{
-    /* Generate default configuration */
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
-    /* Empty handle to esp_http_server */
-    httpd_handle_t server = NULL;
-
-    /* Start the httpd server */
-    if (httpd_start(&server, &config) == ESP_OK)
-	httpd_register_uri_handler(server, &uri_post);
-    web_serv = server;
-    return server;
-}
-
-void stop_webserver(httpd_handle_t server)
-{
-    if (server)
-        httpd_stop(server);
-}
-
-
-void ota_service_begin() {
-	httpd_handle_t server = start_webserver();
-	if (server)
-		return;
-
-	ESP_LOGE(TAG, "Could not start the server - Going down");
-	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
+void ota_service_begin(char *ip) {
+	xTaskCreate(ota_service_task,
+		    "OTA Service Task",
+		    STACK_SIZE,
+		    (void *) ip,
+		    1, NULL);
 }
 
 void ota_service_task(void *pvParameters) {
-	stop_webserver(web_serv);
 restart:
 	;
 	char *server_ip = (char *) pvParameters;
