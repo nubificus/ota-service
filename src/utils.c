@@ -12,6 +12,8 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
+#ifdef OTA_SECURE
+
 #include "dice/utils.h"
 
 #include <stdint.h>
@@ -29,3 +31,5 @@ void DiceHexEncode(const uint8_t* in, size_t num_bytes, void* out,
     }
   }
 }
+
+#endif

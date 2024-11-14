@@ -16,6 +16,8 @@
 // operations that uses mbedtls. The algorithms used are SHA512, HKDF-SHA512,
 // and deterministic ECDSA-P256-SHA512.
 
+#ifdef OTA_SECURE
+
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -567,3 +569,5 @@ out:
   mbedtls_pk_free(&subject_key_context);
   return result;
 }
+
+#endif

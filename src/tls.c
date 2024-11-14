@@ -1,3 +1,5 @@
+#ifdef OTA_SECURE
+
 #include <string.h>
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
@@ -200,3 +202,5 @@ int update_wait(mbedtls_ssl_context *ssl) {
 int tls_next_chunk(mbedtls_ssl_context *ssl, unsigned char* buf) {
 	return mbedtls_ssl_read(ssl, buf, CHUNK);
 }
+
+#endif

@@ -1,5 +1,16 @@
 #include "ota-service.h"
+
+#ifdef OTA_SECURE
+
 #include "tls.h"
+#include "dice_cert.h"
+#include <mbedtls/ssl.h>
+
+#else
+
+#define PORT 3333
+
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -8,12 +19,17 @@
 #include "esp_system.h"
 #include "esp_log.h"
 
-#include <mbedtls/ssl.h>
 #include "mbedtls/base64.h"
-#include "dice_cert.h"
 
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
+
+#include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include "lwip/netdb.h"
+#include "lwip/dns.h"
+
 
 #define KB 1024
 #define STACK_SIZE (32 * KB)
@@ -24,7 +40,9 @@
 
 #define MAX_ATTEMPTS 20
 
-static void print_base64_encoded(uint8_t *data, size_t len) {
+static void
+__attribute__ ((unused))
+print_base64_encoded(uint8_t *data, size_t len) {
     size_t output_len;
     size_t encoded_len = 4 * ((len + 2) / 3);
 
@@ -49,7 +67,7 @@ static void print_base64_encoded(uint8_t *data, size_t len) {
 
 static const char *TAG = "ota";
 
-static esp_partition_t* update_partition = NULL;
+static const esp_partition_t* update_partition = NULL;
 static esp_ota_handle_t update_handle = 0;
 static size_t partition_data_written  = 0;
 
@@ -107,6 +125,7 @@ static int ota_setup_partition_and_reboot() {
 	return -1; 
 }
 
+#ifdef OTA_SECURE
 static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 	ESP_LOGI(TAG, "Waiting for update..");
 	const int chunk = 64; 
@@ -130,8 +149,112 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 	ESP_LOGI(TAG, "Now all the data has been received");
 	return 0;
 }
+#endif
 
-void ota_service_task(void *pvParameters);
+#ifndef OTA_SECURE
+int ota_write_partition_from_tcp_stream()
+{
+	unsigned char rx_buffer[1024];
+	char addr_str[128];
+	int addr_family;
+	int ip_protocol;
+
+	struct sockaddr_in destAddr;
+	destAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+	destAddr.sin_family = AF_INET;
+	destAddr.sin_port = htons(PORT);
+	addr_family = AF_INET;
+	ip_protocol = IPPROTO_IP;
+	inet_ntoa_r(destAddr.sin_addr, addr_str, sizeof(addr_str) - 1);
+
+	int listen_sock = socket(addr_family, SOCK_STREAM, ip_protocol);
+	if (listen_sock < 0)
+	{
+		ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+		vTaskDelete(NULL);
+		return -1;
+	}
+	ESP_LOGI(TAG, "Socket created");
+
+	int err = bind(listen_sock, (struct sockaddr *)&destAddr, sizeof(destAddr));
+	if (err != 0)
+	{
+		ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+		ESP_LOGE(TAG, "IPPROTO: %d", ip_protocol);
+		close(listen_sock);
+		vTaskDelete(NULL);
+		return -1;
+	}
+	ESP_LOGI(TAG, "Socket bound, port %d", PORT);
+
+	err = listen(listen_sock, 1);
+	if (err != 0)
+	{
+		ESP_LOGE(TAG, "Error occurred during listen: errno %d", errno);
+		close(listen_sock);
+		vTaskDelete(NULL);
+		return -1;
+	}
+
+	ESP_LOGI(TAG, "Socket listening");
+	struct sockaddr_in sourceAddr;
+	uint addrLen = sizeof(sourceAddr);
+	int sock = accept(listen_sock, (struct sockaddr *)&sourceAddr, (long unsigned int *)&addrLen);
+	if (sock < 0)
+	{
+		ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
+		return -1;
+	}
+
+	ESP_LOGI(TAG, "Socket accepted");
+
+	while (1)
+	{
+		int len = recv(sock, rx_buffer, sizeof(rx_buffer), 0);
+		if (len < 0)
+		{
+			ESP_LOGE(TAG, "recv failed: errno %d", errno);
+			return -1;
+		}
+		else if (len == 0)
+		{
+			ESP_LOGI(TAG, "Connection closed");
+			break;
+		}
+		else
+			ota_append_data_to_partition(rx_buffer, len);
+	}
+
+	ESP_LOGI(TAG, "Closing the socket...");
+	shutdown(sock, 0);
+	close(sock);
+
+	ESP_LOGI(TAG, "Now all the data has been received");
+
+	return 0;
+}
+#endif
+
+#ifdef OTA_SECURE
+
+esp_err_t ota_request_handler_secure(httpd_req_t *req);
+void ota_service_task_secure (void *pvParameters);
+
+#else
+
+esp_err_t ota_request_handler_insecure(httpd_req_t *req);
+void ota_service_task_insecure (void *pvParameters);
+
+#endif
+
+
+esp_err_t ota_request_handler(httpd_req_t *req) {
+#ifdef OTA_SECURE
+	return ota_request_handler_secure(req);
+#else
+	return ota_request_handler_insecure(req);
+#endif
+}
 
 /*
  * The body in the receiving POST
@@ -142,9 +265,11 @@ void ota_service_task(void *pvParameters);
  * argument to the ota-service task
  */
 
+#ifdef OTA_SECURE
+
 #define IP_LEN 16 + 1
 #define POST_BODY_LEN (IP_LEN + 4)
-esp_err_t ota_request_handler(httpd_req_t *req)
+esp_err_t ota_request_handler_secure(httpd_req_t *req)
 {
 	char body[POST_BODY_LEN] = { 0 };
 	size_t msg_len = req->content_len;
@@ -161,25 +286,29 @@ esp_err_t ota_request_handler(httpd_req_t *req)
 	char* ip = calloc(IP_LEN, 1);
 	sscanf(body, "ip: %s", ip);
 	ESP_LOGI(TAG, "OTA Agent IP: %s", ip);
-	const char resp[] = "Received update request: About to update\n";
+	const char resp[] = "Received update request: About to update (Secure)\n";
 	httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-	xTaskCreate(ota_service_task,
+	xTaskCreate(ota_service_task_secure,
 		    "OTA Service Task",
 		    STACK_SIZE,
 		    (void *) ip,
 		    1, NULL);
 	return ESP_OK;
 }
+#endif
 
+#ifdef OTA_SECURE
 void ota_service_begin(char *ip) {
-	xTaskCreate(ota_service_task,
+	xTaskCreate(ota_service_task_secure,
 		    "OTA Service Task",
 		    STACK_SIZE,
 		    (void *) ip,
 		    1, NULL);
 }
+#endif
 
-void ota_service_task(void *pvParameters) {
+#ifdef OTA_SECURE
+void ota_service_task_secure(void *pvParameters) {
 restart:
 	;
 	char *server_ip = (char *) pvParameters;
@@ -242,3 +371,35 @@ reconnect:
 out:
 	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
+#endif
+
+#ifndef OTA_SECURE
+void ota_service_task_insecure(void *pvParameters) {
+	ota_process_begin();	
+
+	if (ota_write_partition_from_tcp_stream() < 0) {
+		ESP_LOGE(TAG, "Failed to update");
+		while (1) vTaskDelay(1000);
+	}
+
+	if (ota_setup_partition_and_reboot()) {
+		ESP_LOGE(TAG, "Failed to setup partition and reboot");
+		while (1) vTaskDelay(1000);
+	}
+	
+	vTaskDelete(NULL);
+}
+#endif
+
+#ifndef OTA_SECURE
+esp_err_t ota_request_handler_insecure(httpd_req_t *req)
+{
+	const char resp[] = "Received update request: About to update (Insecure)\n";
+	httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+	xTaskCreate(ota_service_task_insecure,
+		    "OTA Service Task",
+		    STACK_SIZE, NULL,
+		    1, NULL);
+	return ESP_OK;
+}
+#endif

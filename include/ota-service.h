@@ -17,6 +17,8 @@ esp_err_t ota_request_handler(httpd_req_t *req);
  * process. Pass the IP address of
  * the OTA Agent as an argument.
  * */
+#ifdef OTA_SECURE
 void ota_service_begin(char *ip);
+#endif
 
 #endif

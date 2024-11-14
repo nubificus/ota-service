@@ -1,3 +1,5 @@
+#ifdef OTA_SECURE
+
 #include <stdio.h>
 #include <stdint.h>
 #include <dice/dice.h>
@@ -21,3 +23,5 @@ int main(int argc, char** argv) {
 
   return (int)(ret);
 }
+
+#endif

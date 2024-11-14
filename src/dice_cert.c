@@ -1,3 +1,5 @@
+#ifdef OTA_SECURE
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -160,3 +162,5 @@ fail:
 	DiceClearMemory(NULL, sizeof(final_seal_cdi_buffer), final_seal_cdi_buffer);
 	return -1;
 }
+
+#endif
