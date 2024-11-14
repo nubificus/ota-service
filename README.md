@@ -18,17 +18,26 @@ idf_component_register(SRCS "test.c"
                        INCLUDE_DIRS "."
                        REQUIRES ota-service)
 ```
-You may also have to add the following line inside your project's `sdkconfig` file to resolve some `mbedtls` issues:
+You may also have to add the following configuration to resolve some `mbedtls` issues:
 ```
-CONFIG_MBEDTLS_HKDF_C=y
+idf.py menuconfig
 ```
+and enable `Component config -> mbedTLS -> HKDF Algorithm (RFC 6859)`
+
 Afterwards, you can include the component's header file:
 ```c
 #include "ota-service.h"
 ```
 
-And enable the OTA Service to run **on the background** by calling:
+## API Reference
 ```c
-ota_service_begin(<OTA-Server-IP-Addr>);
+/* 
+ * this function can be passed as an
+ * argument in `akri_set_update_handler()`
+ * so that it only runs when we receive a
+ * POST request at `/update` endpoint.
+ * */
+esp_err_t ota_request_handler(httpd_req_t *req);
 ```
-Make sure you have connected the device on the internet previously.
+
+The component follows the secure OTA workflow when `OTA_SECURE` macro is defined. Otherwise, the update is insecure.
