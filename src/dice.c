@@ -12,6 +12,8 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
+#ifdef OTA_SECURE
+
 #include "dice/dice.h"
 
 #include <string.h>
@@ -190,3 +192,5 @@ out:
                   next_cdi_private_key_seed);
   return result;
 }
+
+#endif

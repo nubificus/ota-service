@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef OTA_SECURE
+
 #ifndef __OTA_TLS_H__
 #define __OTA_TLS_H__
 
@@ -17,5 +19,7 @@ int cert_ok(mbedtls_ssl_context *ssl);
 int update_wait(mbedtls_ssl_context *ssl);
 
 int tls_next_chunk(mbedtls_ssl_context *ssl, unsigned char* buf);
+
+#endif
 
 #endif

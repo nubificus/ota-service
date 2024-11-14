@@ -17,6 +17,7 @@
 // volatile data pointer. Attention has not been given to performance, clearing
 // caches or other potential side channels.
 
+#ifdef OTA_SECURE
 #include "dice/ops.h"
 
 void DiceClearMemory(void* context, size_t size, void* address) {
@@ -26,3 +27,5 @@ void DiceClearMemory(void* context, size_t size, void* address) {
     p[i] = 0;
   }
 }
+
+#endif
