@@ -32,7 +32,7 @@
 
 
 #define KB 1024
-#define STACK_SIZE (32 * KB)
+#define STACK_SIZE (64 * KB)
 
 #define DICE_MAX_CERTIFICATE_SIZE 2048
 #define DICE_MAX_EXTENSION_SIZE 2048
@@ -137,7 +137,7 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 		memset(rx_buffer, 0, sizeof(rx_buffer));
 
 		len = tls_next_chunk(ssl, rx_buffer);
-		if (len == 0)
+		if (len == 0 || len == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
 			break;	
 		else if (len > 0)
 			ota_append_data_to_partition(rx_buffer, len);
@@ -340,7 +340,6 @@ reconnect:
 	if (tls_establish(&ssl, server_ip) < 0)
 		goto reconnect;
 
-	free(server_ip);
 	printf("Established connection with server\n");
 
 	if (tls_send_dice_cert(&ssl, (void *) cert_buf, len) < 0) {
