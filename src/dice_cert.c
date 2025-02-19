@@ -41,109 +41,103 @@
 
 static const char *TAG = "dice-cert-gen";
 
+static const uint8_t asym_salt[] = {
+    0x63, 0xB6, 0xA0, 0x4D, 0x2C, 0x07, 0x7F, 0xC1, 0x0F, 0x63, 0x9F,
+    0x21, 0xDA, 0x79, 0x38, 0x44, 0x35, 0x6C, 0xC2, 0xB0, 0xB4, 0x41,
+    0xB3, 0xA7, 0x71, 0x24, 0x03, 0x5C, 0x03, 0xF8, 0xE1, 0xBE, 0x60,
+    0x35, 0xD3, 0x1F, 0x28, 0x28, 0x21, 0xA7, 0x45, 0x0A, 0x02, 0x22,
+    0x2A, 0xB1, 0xB3, 0xCF, 0xF1, 0x67, 0x9B, 0x05, 0xAB, 0x1C, 0xA5,
+    0xD1, 0xAF, 0xFB, 0x78, 0x9C, 0xCD, 0x2B, 0x0B, 0x3B};
+
 int gen_dice_cert(void *buf, size_t max_len) {
 	uint8_t final_seal_cdi_buffer[DICE_CDI_SIZE] = {0};
 	uint8_t final_cdi_buffer[DICE_CDI_SIZE] = {0};
-	uint8_t cdi_buffer[DICE_CDI_SIZE] = {0};
-	uint8_t seal_cdi_buffer[DICE_CDI_SIZE] = {0};
 	DiceInputValues input_values = {0};
-	uint8_t cert_buffer[2048];
+	uint8_t cert_buffer[2048] = { 0 };
 	DiceResult dice_ret;
 	int ret, i;
 	size_t cert_size;
-	const uint8_t uds_buffer[] = {
-		0xDA, 0xDD, 0xAE, 0xBC, 0x80, 0x20, 0xDA, 0x9F, 0xF0, 0xDD, 0x5A,
-		0x24, 0xC8, 0x3A, 0xA5, 0xA5, 0x42, 0x86, 0xDF, 0xC2, 0x63, 0x03,
-		0x1E, 0x32, 0x9B, 0x4D, 0xA1, 0x48, 0x43, 0x06, 0x59, 0xFE, 0x62,
-		0xCD, 0xB5, 0xB7, 0xE1, 0xE0, 0x0F, 0xC6, 0x80, 0x30, 0x67, 0x11,
-		0xEB, 0x44, 0x4A, 0xF7, 0x72, 0x09, 0x35, 0x94, 0x96, 0xFC, 0xFF,
-		0x1D, 0xB9, 0x52, 0x0B, 0xA5, 0x1C, 0x7B, 0x29, 0xEA};
+	uint8_t uds_buffer[DICE_PRIVATE_KEY_SEED_SIZE];
+	uint8_t mac_addr[6];
 
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
+
+#ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+	psa_status_t status = psa_crypto_init();
+	if (status != PSA_SUCCESS) {
+		ESP_LOGE(TAG, "Failed to initialize PSA crypto, returned %d",
+			 (int) status);
+		return;
+	}
+#endif
 
 	mbedtls_ctr_drbg_init(&ctr_drbg);
 	ESP_LOGI(TAG, "Seeding the random number generator");
 
 	mbedtls_entropy_init(&entropy);
-	if ((ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func,
+	if((ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func,
 					&entropy, NULL, 0)) != 0) {
 		ESP_LOGE(TAG, "mbedtls_ctr_drbg_seed returned %d", ret);
 		abort();
 	}
-	ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes",
-			esp_get_minimum_free_heap_size());
 
-	ESP_LOGI(TAG, "Stack bytes available: '%d'",
-			uxTaskGetStackHighWaterMark(NULL));
-	for (i = 0; i >= 0; i--) {
-		ESP_LOGI(TAG, "%d...", i);
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
-	}
-	esp_flash_read(NULL, input_values.code_hash, BOOTLOADER_HASH_OFFSET, BOOTLOADER_HASH_SIZE);
-
-	#if DEBUG
-	printf("\nBootloader hash (%d bytes from 0x%02x):\n",
-			BOOTLOADER_HASH_SIZE,
-			BOOTLOADER_HASH_OFFSET);
-	for (i = 0; i < 64; i++) {
-		printf("%02x:", input_values.code_hash[i]);
-	}
-	printf("\n\n");
-	#endif
-
-	if (esp_efuse_mac_get_default(input_values.config_value)) {
+	if(esp_efuse_mac_get_default(mac_addr)) {
 		ESP_LOGE(TAG, "Failed to read MAC addr");
 		goto fail;
 	}
 
-	#if DEBUG
-	printf("MAC: ");
+	/* the asym_salt must match the one we use on the certificate generator */
+	ret = DiceKdf(NULL, DICE_PRIVATE_KEY_SEED_SIZE, mac_addr,
+		      sizeof(mac_addr), asym_salt, sizeof(asym_salt),
+		      (const uint8_t*)"UDS hkdf", 8, uds_buffer);
+	if (ret != kDiceResultOk) {
+		printf("DICE HKDF failed!");
+		goto fail;
+	}
+
+	input_values.mode = kDiceModeNormal;
+	input_values.config_type = kDiceConfigTypeInline;
+	esp_flash_read(NULL, input_values.code_hash, BOOTLOADER_HASH_OFFSET,
+		       BOOTLOADER_HASH_SIZE);
+	memset(input_values.config_value, 0, sizeof(input_values.config_value));
+	esp_flash_read(NULL, input_values.config_value, APP_HASH_OFFSET,
+		       APP_HASH_SIZE);
+
+	dice_ret = DiceMainFlow(NULL, uds_buffer, uds_buffer, &input_values,
+				sizeof(cert_buffer), cert_buffer,
+				&cert_size, final_cdi_buffer,
+				final_seal_cdi_buffer);
+	if (dice_ret != kDiceResultOk) {
+		ESP_LOGE(TAG, "DICE CDI failed!");
+		goto fail;
+	}
+
+#if DEBUG
+	ESP_LOGI(TAG, "Using MAC ");
 	for (i = 0; i < 6; i++)
-		printf("%02x:", input_values.config_value[i]);
-	printf("\n\n");
-	#endif
-
-	input_values.mode = kDiceModeNormal;
-	input_values.config_type = kDiceConfigTypeInline;
-	dice_ret = DiceMainFlow(NULL, uds_buffer, uds_buffer,
-				&input_values, 0, NULL, NULL,
-				cdi_buffer, seal_cdi_buffer);
-	if (dice_ret != kDiceResultOk) {
-		ESP_LOGE(TAG, "DICE first CDI failed!");
-		goto fail;
-	}
-
-	#if DEBUG
-	printf("First CDI buffer created:\n");
-	for (i = 0; i < DICE_CDI_SIZE; i++)
-		printf("%x:", cdi_buffer[i]);
-	printf("\n\n");
-	#endif
-
-	memset(input_values.code_hash, 0, sizeof(input_values.code_hash));
-	esp_flash_read(NULL, input_values.code_hash, APP_HASH_OFFSET, APP_HASH_SIZE);
-	
-	#if DEBUG
-	printf("Application hash (%d bytes from 0x%02x):\n",
-			APP_HASH_SIZE,
-			APP_HASH_OFFSET);
-	for (i = 0; i < APP_HASH_SIZE; i++)
+		printf("%02x:", mac_addr[i]);
+	printf("\n");
+	ESP_LOGI(TAG, "UDS ");
+	for (i = 0; i < sizeof(uds_buffer); i++)
+		printf("%02x:", uds_buffer[i]);
+	printf("\n");
+	ESP_LOGI(TAG, "Bootloader hash");
+	for (i = 0; i < 64; i++) {
 		printf("%02x:", input_values.code_hash[i]);
-	printf("\n\n");
-	#endif
-
-	input_values.mode = kDiceModeNormal;
-	input_values.config_type = kDiceConfigTypeInline;
-	dice_ret = DiceMainFlow(NULL, cdi_buffer, cdi_buffer, &input_values,
-				sizeof(cert_buffer), cert_buffer,&cert_size,
-				final_cdi_buffer, final_seal_cdi_buffer);
-	if (dice_ret != kDiceResultOk) {
-		ESP_LOGE(TAG, "DICE final CDI failed!");
-		goto fail;
 	}
-	ESP_LOGI(TAG, "Final cdi buffer created");
-	
+	printf("\n");
+	ESP_LOGI(TAG, "Application hash");
+	for (i = 0; i < 64; i++)
+		printf("%02x:", input_values.code_hash[i]);
+	printf("\n");
+#endif
+
+	ESP_LOGI(TAG, "CDI buffer created");
+	for (i = 0; i < DICE_CDI_SIZE; i++)
+		printf("%x:", final_cdi_buffer[i]);
+	printf("\n");
+
 	if (cert_size + 1 > max_len) {
 		ESP_LOGE(TAG, "Buffer length not enough to hold the certificate");
 		goto fail;
@@ -151,13 +145,10 @@ int gen_dice_cert(void *buf, size_t max_len) {
 
 	memset(buf, 0, max_len);
 	memcpy(buf, cert_buffer, cert_size);
-
-	DiceClearMemory(NULL, sizeof(final_cdi_buffer), final_cdi_buffer);
-	DiceClearMemory(NULL, sizeof(final_seal_cdi_buffer), final_seal_cdi_buffer);
-
 	return cert_size;
-
 fail:
+	/* Clear memory once the CDIs are consumed */
+	//TODO Clean all uds_buffer etc
 	DiceClearMemory(NULL, sizeof(final_cdi_buffer), final_cdi_buffer);
 	DiceClearMemory(NULL, sizeof(final_seal_cdi_buffer), final_seal_cdi_buffer);
 	return -1;
