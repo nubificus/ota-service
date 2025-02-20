@@ -126,32 +126,61 @@ static int ota_setup_partition_and_reboot() {
 }
 
 #ifdef OTA_SECURE
-static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
-	ESP_LOGI(TAG, "Waiting for update..");
-	const int chunk = 64; 
-	unsigned char rx_buffer[chunk];
-	int len;
 
-	partition_data_written  = 0;
+#define RETRY_DELAY_MS 500
+#define MAX_RETRY_TIME_MS 3000
+
+static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
+	vTaskDelay(pdMS_TO_TICKS(1500));
+	ESP_LOGI(TAG, "Waiting for update..");
+	const int chunk = 64;
+	unsigned char rx_buffer[chunk];
+	int ret;
+	int total_sleep_time = 0;
+	bool verified = false;
+	bool ota_began = false;
+
+	partition_data_written = 0;
 	while (1) {
 		memset(rx_buffer, 0, sizeof(rx_buffer));
 
-		len = tls_next_chunk(ssl, rx_buffer);
-		if (len == 0 || len == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
-			break;	
-		else if (len > 0)
-			ota_append_data_to_partition(rx_buffer, len);
-		else
-			return -1;
+		ret = tls_next_chunk(ssl, rx_buffer);
+		if (!ret || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+			if (!verified)
+				ret = -1;
+			else
+				ret = 0;
+
+			break;
+		} else if (ret > 0) {
+			verified = true;
+			if (!ota_began) {
+				ota_process_begin();
+				ota_began = true;
+			}
+			total_sleep_time = 0;
+			ota_append_data_to_partition(rx_buffer, ret);
+			continue;
+		}
+
+		/* Wait for an amount of time before retrying */
+		if (total_sleep_time < MAX_RETRY_TIME_MS) {
+			vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+			total_sleep_time += RETRY_DELAY_MS;
+		} else {
+			ESP_LOGE(TAG, "Max retry time exceeded, aborting.");
+			ret = -1;
+			break;
+		}
 	}
-
 	tls_kill_connection(ssl);
-	ESP_LOGI(TAG, "Now all the data has been received");
-	return 0;
+	if (ret > 0)
+		ESP_LOGI(TAG, "Now all the data has been received");
+	return ret;
 }
-#endif
 
-#ifndef OTA_SECURE
+#else
+
 int ota_write_partition_from_tcp_stream()
 {
 	unsigned char rx_buffer[1024];
@@ -309,8 +338,6 @@ void ota_service_begin(char *ip) {
 
 #ifdef OTA_SECURE
 void ota_service_task_secure(void *pvParameters) {
-restart:
-	;
 	char *server_ip = (char *) pvParameters;
 	mbedtls_ssl_context ssl;
 	uint8_t reconnect = 0;
@@ -342,32 +369,22 @@ reconnect:
 
 	printf("Established connection with server\n");
 
+	vTaskDelay(500 / portTICK_PERIOD_MS);
+
 	if (tls_send_dice_cert(&ssl, (void *) cert_buf, len) < 0) {
 		ESP_LOGE(TAG, "Could not send the certificate in the host");
 		goto reconnect;	
 	}
 
-	if (cert_ok(&ssl)) {
-		ESP_LOGI(TAG, "Cert OK");
-	} else {
-		ESP_LOGE(TAG, "Could not verify.. Closing the connection");
-		tls_kill_connection(&ssl);
-		goto out;
-	}
-
-	vTaskDelay(1000 / portTICK_PERIOD_MS);
-	ota_process_begin();	
-
 	if (ota_write_partition_from_tls_stream(&ssl) < 0) {
 		ESP_LOGE(TAG, "Failed to update");
-		goto restart;
+		goto reconnect;
 	}
 
 	if (ota_setup_partition_and_reboot()) {
 		ESP_LOGE(TAG, "Failed to setup partition and reboot");
-		goto restart;
+		goto reconnect;
 	}
-out:
 	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 #endif
