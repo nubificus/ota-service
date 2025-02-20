@@ -32,10 +32,6 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
 
     mbedtls_net_init(&server_fd);
     
-    
-
-    //fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
-
     mbedtls_ssl_init(ssl);
     mbedtls_ssl_config_init(&conf);
     mbedtls_entropy_init(&entropy);
@@ -122,6 +118,7 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
     }
 
     ESP_LOGI(TAG, "Server certificate verified");
+    mbedtls_net_set_nonblock(&server_fd);
     return 1;
 
 exit:
@@ -136,14 +133,45 @@ exit:
     return -1;
 }
 
+#define RETRY_DELAY_MS 500
+#define MAX_RETRY_TIME_MS 3000
+
 int tls_send_dice_cert(mbedtls_ssl_context *ssl, void *cert, size_t len) {
 	ESP_LOGI(TAG, "Attemting to send the Certificate..");
-	char err_buf[100];
-	int ret = mbedtls_ssl_write(ssl, (const unsigned char *) cert, len);
-        if (ret < 0) {
-		mbedtls_strerror(ret, err_buf, sizeof(err_buf));
-		ESP_LOGE(TAG, "Failed to write to server: %s", err_buf);
-	        return -1;
+	int total_sleep_time = 0;
+	int bytes_sent = 0;
+
+	while (bytes_sent < len) {
+		const unsigned char *read_from = cert + bytes_sent;
+		int nr_bytes = len - bytes_sent;
+		int ret = mbedtls_ssl_write(ssl, read_from, nr_bytes);
+
+		if (ret > 0) {
+			bytes_sent += ret;
+			total_sleep_time = 0;
+			continue;
+		}
+
+		/* Handle errors */
+		if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+			ESP_LOGE(TAG, "Connection closed before sending the certificate");
+			return -1;
+		} else if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+			ESP_LOGW(TAG, "mbedtls_ssl_write() wants read/write, retrying...");
+		} else if (ret == 0) {
+			ESP_LOGE(TAG, "Connection closed unexpectedly");
+		} else {
+			ESP_LOGE(TAG, "mbedtls_ssl_write() failed with error code: %d", ret);
+		}
+
+		/* Wait for an amount of time before retrying */
+		if (total_sleep_time < MAX_RETRY_TIME_MS) {
+			vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+			total_sleep_time += RETRY_DELAY_MS;
+		} else {
+			ESP_LOGE(TAG, "Max retry time exceeded, aborting.");
+			return -1;
+		}
 	}
 	ESP_LOGI(TAG, "Message sent to server");
 	return 1;
@@ -200,6 +228,19 @@ int update_wait(mbedtls_ssl_context *ssl) {
 
 #define CHUNK 64
 int tls_next_chunk(mbedtls_ssl_context *ssl, unsigned char* buf) {
+	static bool unset_nonblock = false;
+
+	if (!unset_nonblock) {
+		mbedtls_net_context *net_ctx =
+			(mbedtls_net_context *) ssl->MBEDTLS_PRIVATE(p_bio);
+		if (net_ctx == NULL)
+			return -1;
+
+		int fd = net_ctx->fd;
+		int oldfl = fcntl(fd, F_GETFL);
+		fcntl(fd, F_SETFL, oldfl & ~O_NONBLOCK);
+		unset_nonblock = true;
+	}
 	return mbedtls_ssl_read(ssl, buf, CHUNK);
 }
 
