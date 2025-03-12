@@ -343,11 +343,11 @@ void ota_service_task_secure(void *pvParameters) {
 	uint8_t reconnect = 0;
 	uint8_t attempts = 0;
 
-	char cert_buf[1000] = {0};
+	char cert_buf[1024] = {0};
 	int len = gen_dice_cert(cert_buf, sizeof(cert_buf));
 	if (len <= 0) {
 		ESP_LOGE(TAG, "Could not generate the certificate");
-		abort();
+		vTaskDelete(NULL);
 	}
 	#if DEBUG
 	print_base64_encoded((uint8_t*) cert_buf, len);
@@ -356,7 +356,7 @@ void ota_service_task_secure(void *pvParameters) {
 reconnect:
 	if (attempts++ >= MAX_ATTEMPTS) {
 		ESP_LOGE(TAG, "Reached max number of attempts to connect - aborting");
-		while(1) vTaskDelay(1000 / portTICK_PERIOD_MS);
+		vTaskDelete(NULL);
 	}
 	if (reconnect) {
 		ESP_LOGI(TAG, "Waiting 4 seconds before trying again...");
@@ -373,17 +373,17 @@ reconnect:
 
 	if (tls_send_dice_cert(&ssl, (void *) cert_buf, len) < 0) {
 		ESP_LOGE(TAG, "Could not send the certificate in the host");
-		goto reconnect;	
+		vTaskDelete(NULL);
 	}
 
 	if (ota_write_partition_from_tls_stream(&ssl) < 0) {
 		ESP_LOGE(TAG, "Failed to update");
-		goto reconnect;
+		vTaskDelete(NULL);
 	}
 
 	if (ota_setup_partition_and_reboot()) {
 		ESP_LOGE(TAG, "Failed to setup partition and reboot");
-		goto reconnect;
+		vTaskDelete(NULL);
 	}
 	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
