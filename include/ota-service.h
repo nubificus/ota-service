@@ -3,6 +3,14 @@
 
 #include "esp_http_server.h"
 
+/*
+ * `onboard_request_handler()` can be passed
+ * as an argument in `akri_set_onboard_handler()`
+ * so that it runs when we receive a GET request
+ * at `/onboard` endpoint.
+ * */
+esp_err_t onboard_request_handler(httpd_req_t *req);
+
 /* 
  * this function can be passed as an
  * argument in `akri_set_update_handler()`
