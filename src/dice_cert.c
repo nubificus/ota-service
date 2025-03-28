@@ -133,7 +133,7 @@ secure_boot_version_t secure_boot_version() {
 		return SECURE_BOOT_V1;
 #elif defined(CONFIG_IDF_TARGET_ESP32S2) || \
 	defined(CONFIG_IDF_TARGET_ESP32S3) || \
-	defined(CONFIG_IDF_TARGET_ESP32C3)
+	defined(CONFIG_IDF_TARGET_ESP32C6)
 
 	if (esp_efuse_read_field_bit(ESP_EFUSE_SECURE_BOOT_EN))
 		return SECURE_BOOT_V2;
