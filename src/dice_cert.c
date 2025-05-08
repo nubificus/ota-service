@@ -44,7 +44,7 @@
 
 #define MAGIC 0xe7
 #define V2 0x02
-#define JUMP (64 * 1024)
+#define JUMP CONFIG_MMU_PAGE_SIZE
 #define HASH_OFF 4
 #define HASH_SIZE 32
 #define CSR_OFF 1196
@@ -71,48 +71,54 @@ static int dice_config_v2(DiceInputValues *input_values) {
 
 	bool boot_hash_written = false;
 	const uint32_t jump = JUMP;
-	for (uint32_t offset = jump; offset < flash_size; offset += jump) {
+	for (uint32_t offset = 0x0; offset < flash_size; offset += jump) {
 		const void *mm = NULL;
 		const size_t size = 4096;
 		spi_flash_mmap_handle_t mm_handle = 0;
 
-		esp_err_t err = spi_flash_mmap(offset, size, SPI_FLASH_MMAP_DATA,
+		esp_err_t err = spi_flash_mmap(offset, CONFIG_MMU_PAGE_SIZE, SPI_FLASH_MMAP_DATA,
 					       &mm, &mm_handle);
 		if (err != ESP_OK) {
 			printf("Failed to map flash region: %d\n", err);
 			return -1;
 		}
 
-                const uint8_t *bytes = (const uint8_t *) mm;
+		for (unsigned int suboff = 0x0; suboff < CONFIG_MMU_PAGE_SIZE; suboff += size) {
+			/*
+			printf("Offset checked: 0x%x\n", (unsigned int)(offset + suboff));
+			*/
 
-                /* First condition */
-                if (bytes[0] != MAGIC && bytes[1] != V2 && bytes[2] && bytes[3])
-                        goto unmap;
+			const uint8_t *bytes = (const uint8_t *) (mm + suboff);
 
-                /* Second condition */
-                if (*((uint32_t *)(bytes + CSR_OFF)) != esp_crc32_le(0, bytes, CSR_OFF))
-                        goto unmap;
+			/* First condition */
+			if (bytes[0] != MAGIC && bytes[1] != V2 && bytes[2] && bytes[3])
+				continue;
 
-                /* Third condition */
-                if (memcmp(bytes + PAD_OFF, PAD, PAD_LEN))
-                        goto unmap;
+			/* Second condition */
+			if (*((uint32_t *)(bytes + CSR_OFF)) != esp_crc32_le(0, bytes, CSR_OFF))
+				continue;
 
-                printf("Found signature block at offset: %d\n", (int) offset);
+			/* Third condition */
+			if (memcmp(bytes + PAD_OFF, PAD, PAD_LEN))
+				continue;
 
-		if (!boot_hash_written) {
-			printf("Writing boot hash..\n");
-			memcpy(input_values->code_hash, &bytes[HASH_OFF], HASH_SIZE);
-			memcpy(input_values->code_hash + HASH_SIZE, &bytes[HASH_OFF],
-			       HASH_SIZE);
-			boot_hash_written = true;
-		} else {
-			printf("Writing application hash..\n");
-			memset(input_values->config_value, 0, sizeof(input_values->config_value));
-			memcpy(input_values->config_value, &bytes[HASH_OFF], APP_HASH_SIZE);
-			spi_flash_munmap(mm_handle);
-			return 0;
+			printf("Found signature block at offset: 0x%x -- Address: 0x%x\n", (unsigned int)(offset + suboff), (unsigned int)bytes);
+
+			if (!boot_hash_written) {
+				printf("Writing boot hash..\n");
+				memcpy(input_values->code_hash, &bytes[HASH_OFF], HASH_SIZE);
+				memcpy(input_values->code_hash + HASH_SIZE, &bytes[HASH_OFF],
+				       HASH_SIZE);
+				boot_hash_written = true;
+			} else {
+				printf("Writing application hash..\n");
+				memset(input_values->config_value, 0, sizeof(input_values->config_value));
+				memcpy(input_values->config_value, &bytes[HASH_OFF], APP_HASH_SIZE);
+				spi_flash_munmap(mm_handle);
+				return 0;
+			}
+
 		}
-unmap:
 		spi_flash_munmap(mm_handle);
 	}
 	return -1;
@@ -258,7 +264,7 @@ int gen_dice_cert(void *buf, size_t max_len) {
 	printf("\n");
 	ESP_LOGI(TAG, "Application hash");
 	for (i = 0; i < 64; i++)
-		printf("%02x:", input_values.code_hash[i]);
+		printf("%02x:", input_values.config_value[i]);
 	printf("\n");
 #endif
 
