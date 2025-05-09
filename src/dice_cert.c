@@ -23,6 +23,7 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/error.h"
+#include "mbedtls/version.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_flash.h"
@@ -204,6 +205,10 @@ int gen_dice_cert(void *buf, size_t max_len) {
 	mbedtls_entropy_context entropy;
 	mbedtls_ctr_drbg_context ctr_drbg;
 
+	char version[16] = { 0 };
+	mbedtls_version_get_string(version);
+	printf("mbedtls version: %s\n", version);
+
 #ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 	psa_status_t status = psa_crypto_init();
 	if (status != PSA_SUCCESS) {
@@ -223,10 +228,7 @@ int gen_dice_cert(void *buf, size_t max_len) {
 		abort();
 	}
 
-	if(esp_efuse_mac_get_default(mac_addr)) {
-		ESP_LOGE(TAG, "Failed to read MAC addr");
-		goto fail;
-	}
+	esp_read_mac(mac_addr, ESP_MAC_WIFI_STA);
 
 	/* the asym_salt must match the one we use on the certificate generator */
 	ret = DiceKdf(NULL, DICE_PRIVATE_KEY_SEED_SIZE, mac_addr,
