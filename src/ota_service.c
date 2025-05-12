@@ -72,11 +72,16 @@ static esp_ota_handle_t update_handle = 0;
 static size_t partition_data_written  = 0;
 
 static void ota_process_begin() {
+	static bool retried = false;
+	if (retried) {
+		esp_err_t err = esp_ota_end(update_handle);
+		if (err != ESP_OK && err != ESP_ERR_OTA_VALIDATE_FAILED)
+			ESP_LOGW(TAG, "esp_ota_end failed (%s)", esp_err_to_name(err));
+	}
 	update_partition = esp_ota_get_next_update_partition(NULL);
 	assert(update_partition != NULL);
 
 	esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
-
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG, "esp_ota_begin() failed (%s)", esp_err_to_name(err));
 		esp_ota_abort(update_handle);
@@ -84,6 +89,7 @@ static void ota_process_begin() {
 		while(1) vTaskDelay(1000);
 	}
 
+	retried = true;
 	ESP_LOGI(TAG, "esp_ota_begin succeeded");
 }
 
@@ -128,7 +134,7 @@ static int ota_setup_partition_and_reboot() {
 #ifdef OTA_SECURE
 
 #define RETRY_DELAY_MS 500
-#define MAX_RETRY_TIME_MS 3000
+#define MAX_RETRY_TIME_MS 5000
 
 static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 	vTaskDelay(pdMS_TO_TICKS(1500));
