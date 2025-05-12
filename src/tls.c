@@ -16,7 +16,25 @@ static const char *TAG = "tls";
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_crt_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_server_crt_end");
 
+mbedtls_net_context server_fd;
+mbedtls_ssl_config conf;
+mbedtls_entropy_context entropy;
+mbedtls_ctr_drbg_context ctr_drbg;
+mbedtls_x509_crt cacert;
+
+void tls_cleanup(mbedtls_ssl_context *ssl) {
+	ESP_LOGW(TAG, "TLS has been set earlier, cleaning up..");
+	mbedtls_net_free(&server_fd);
+	mbedtls_x509_crt_free(&cacert);
+	mbedtls_ssl_free(ssl);
+	mbedtls_ssl_config_free(&conf);
+	mbedtls_ctr_drbg_free(&ctr_drbg);
+	mbedtls_entropy_free(&entropy);
+}
+
 const char *server_port = "4433";
+
+bool cleanup = false;
 
 int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
     if (ssl == NULL)
@@ -24,14 +42,13 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
 
     const char *pers = "ssl_client";
     char err_buf[100];
-    mbedtls_net_context server_fd;
-    mbedtls_ssl_config conf;
-    mbedtls_entropy_context entropy;
-    mbedtls_ctr_drbg_context ctr_drbg;
-    mbedtls_x509_crt cacert;
+
+    if (cleanup) {
+	    tls_cleanup(ssl);
+	    cleanup = false;
+    }
 
     mbedtls_net_init(&server_fd);
-    
     mbedtls_ssl_init(ssl);
     mbedtls_ssl_config_init(&conf);
     mbedtls_entropy_init(&entropy);
@@ -79,13 +96,6 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
         goto exit;
     }
 
-    //int fd = server_fd.fd;
-    //fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    //if (fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK)
-	//    printf("Blocking mode enabled\n");
-    //else
-//	    printf("Blocking mode disabled\n");
-    
     ESP_LOGI(TAG, "Connecting to %s:%s...", server_ip, server_port);
     ret = mbedtls_net_connect(&server_fd, server_ip, server_port, MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) {
@@ -119,6 +129,7 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
 
     ESP_LOGI(TAG, "Server certificate verified");
     mbedtls_net_set_nonblock(&server_fd);
+    cleanup = true;
     return 1;
 
 exit:
@@ -134,7 +145,7 @@ exit:
 }
 
 #define RETRY_DELAY_MS 500
-#define MAX_RETRY_TIME_MS 3000
+#define MAX_RETRY_TIME_MS 5000
 
 int tls_send_dice_cert(mbedtls_ssl_context *ssl, void *cert, size_t len) {
 	ESP_LOGI(TAG, "Attemting to send the Certificate..");

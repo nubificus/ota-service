@@ -67,16 +67,21 @@ print_base64_encoded(uint8_t *data, size_t len) {
 
 static const char *TAG = "ota";
 
+mbedtls_ssl_context ssl;
+
 static const esp_partition_t* update_partition = NULL;
 static esp_ota_handle_t update_handle = 0;
 static size_t partition_data_written  = 0;
 
 static void ota_process_begin() {
+	ESP_LOGI(TAG, "Beginning OTA process..");
 	static bool retried = false;
 	if (retried) {
+		/* Cleanup previous attempt */
+		ESP_LOGI(TAG, "Retried OTA process earlier, ending the previous attempt..");
 		esp_err_t err = esp_ota_end(update_handle);
 		if (err != ESP_OK && err != ESP_ERR_OTA_VALIDATE_FAILED)
-			ESP_LOGW(TAG, "esp_ota_end failed (%s)", esp_err_to_name(err));
+			ESP_LOGW(TAG, "esp_ota_end(): (%s)", esp_err_to_name(err));
 	}
 	update_partition = esp_ota_get_next_update_partition(NULL);
 	assert(update_partition != NULL);
@@ -90,7 +95,7 @@ static void ota_process_begin() {
 	}
 
 	retried = true;
-	ESP_LOGI(TAG, "esp_ota_begin succeeded");
+	ESP_LOGI(TAG, "esp_ota_begin(): Success");
 }
 
 static int ota_append_data_to_partition(unsigned char* data, size_t len) {
@@ -345,7 +350,6 @@ void ota_service_begin(char *ip) {
 #ifdef OTA_SECURE
 void ota_service_task_secure(void *pvParameters) {
 	char *server_ip = (char *) pvParameters;
-	mbedtls_ssl_context ssl;
 	uint8_t reconnect = 0;
 	uint8_t attempts = 0;
 

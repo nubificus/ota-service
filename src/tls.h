@@ -20,6 +20,8 @@ int update_wait(mbedtls_ssl_context *ssl);
 
 int tls_next_chunk(mbedtls_ssl_context *ssl, unsigned char* buf);
 
+void tls_cleanup(mbedtls_ssl_context *ssl);
+
 #endif
 
 #endif
