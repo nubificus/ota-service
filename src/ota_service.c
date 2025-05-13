@@ -353,14 +353,14 @@ void ota_service_task_secure(void *pvParameters) {
 	uint8_t reconnect = 0;
 	uint8_t attempts = 0;
 
-	char cert_buf[1024] = {0};
-	int len = gen_dice_cert(cert_buf, sizeof(cert_buf));
+	unsigned char *cert;
+	int len	= get_dice_cert_ptr(&cert);
 	if (len <= 0) {
 		ESP_LOGE(TAG, "Could not generate the certificate");
 		vTaskDelete(NULL);
 	}
 	#if DEBUG
-	print_base64_encoded((uint8_t*) cert_buf, len);
+	print_base64_encoded((uint8_t*) cert, len);
 	#endif
 
 reconnect:
@@ -381,7 +381,7 @@ reconnect:
 
 	vTaskDelay(500 / portTICK_PERIOD_MS);
 
-	if (tls_send_dice_cert(&ssl, (void *) cert_buf, len) < 0) {
+	if (tls_send_dice_cert(&ssl, (void *) cert, len) < 0) {
 		ESP_LOGE(TAG, "Could not send the certificate in the host");
 		vTaskDelete(NULL);
 	}

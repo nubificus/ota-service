@@ -191,11 +191,32 @@ static const uint8_t asym_salt[] = {
     0x2A, 0xB1, 0xB3, 0xCF, 0xF1, 0x67, 0x9B, 0x05, 0xAB, 0x1C, 0xA5,
     0xD1, 0xAF, 0xFB, 0x78, 0x9C, 0xCD, 0x2B, 0x0B, 0x3B};
 
+static unsigned char cache[1024] = { 0 };
+static int cache_len = 0;
+int get_dice_cert_ptr(unsigned char **ptr) {
+	if (cache_len == 0) {
+		ESP_LOGW(TAG, "The certificate has not been generated before.");
+		ESP_LOGW(TAG, "About to create the certificate and place it in cache");
+		cache_len = gen_dice_cert((void*)cache, sizeof(cache));
+		if (cache_len <= 0) {
+			ESP_LOGE(TAG, "Could not generate DICE certificate");
+			*ptr = NULL;
+			return 0;
+		}
+		ESP_LOGI(TAG, "The certificate was placed in cache!");
+	} else {
+		ESP_LOGI(TAG, "The certificate is already in cache!");
+	}
+
+	*ptr = &cache[0];
+	return cache_len;
+}
+
 int gen_dice_cert(void *buf, size_t max_len) {
 	uint8_t final_seal_cdi_buffer[DICE_CDI_SIZE] = { 0 };
 	uint8_t final_cdi_buffer[DICE_CDI_SIZE] = { 0 };
 	DiceInputValues input_values = { 0 };
-	uint8_t cert_buffer[2048] = { 0 };
+	uint8_t cert_buffer[1024] = { 0 };
 	DiceResult dice_ret;
 	int ret, i;
 	size_t cert_size;

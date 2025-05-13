@@ -7,6 +7,9 @@
 
 int gen_dice_cert(void *buf, size_t max_len);
 
+/* Uses the cache */
+int get_dice_cert_ptr(unsigned char **ptr);
+
 #endif
 
 #endif

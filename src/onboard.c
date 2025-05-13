@@ -10,11 +10,11 @@
 #define DESC "Dice attestation certificate"
 #define FAIL_MSG "Could not generate the certificate"
 
-static char cert_buf[1024] = { 0 };
+static unsigned char *cert = NULL;
 static int len = 0;
 
-void gen_dice_cert_task(void *pvParameters) {
-	len = gen_dice_cert(cert_buf, sizeof(cert_buf));
+void get_dice_cert_task(void *pvParameters) {
+	len = get_dice_cert_ptr(&cert);
 	if (len <= 0) {
 		printf("Could not generate the certificate");
 		len = -1;
@@ -24,7 +24,7 @@ void gen_dice_cert_task(void *pvParameters) {
 
 esp_err_t onboard_request_handler(httpd_req_t *req) {
 	if (len == 0) { /* if the certificate has not been generated */
-		BaseType_t result = xTaskCreate(gen_dice_cert_task, DESC, STACK,
+		BaseType_t result = xTaskCreate(get_dice_cert_task, DESC, STACK,
 						NULL, 1, NULL);
 		if (result != pdPASS) {
 			printf("Could not create dice cert task.\n");
@@ -42,6 +42,6 @@ esp_err_t onboard_request_handler(httpd_req_t *req) {
 		return ESP_OK;
 	}
 
-	httpd_resp_send(req, cert_buf, len);
+	httpd_resp_send(req, (void*)cert, len);
 	return ESP_OK;
 }
