@@ -40,6 +40,7 @@
 
 #define MAX_ATTEMPTS 20
 
+#if DEBUG
 static void
 __attribute__ ((unused))
 print_base64_encoded(uint8_t *data, size_t len) {
@@ -64,6 +65,7 @@ print_base64_encoded(uint8_t *data, size_t len) {
     printf("%s\n\n", encoded);
     free(encoded);
 }
+#endif
 
 static const char *TAG = "ota";
 
@@ -82,7 +84,11 @@ static void ota_process_begin() {
 		esp_err_t err = esp_ota_end(update_handle);
 		if (err != ESP_OK && err != ESP_ERR_OTA_VALIDATE_FAILED)
 			ESP_LOGW(TAG, "esp_ota_end(): (%s)", esp_err_to_name(err));
+		update_handle = 0;
+		partition_data_written = 0;
+		update_partition = NULL;
 	}
+
 	update_partition = esp_ota_get_next_update_partition(NULL);
 	assert(update_partition != NULL);
 
@@ -109,30 +115,33 @@ static int ota_append_data_to_partition(unsigned char* data, size_t len) {
 	return 0;
 }
 
+#define EIMG  -1
+#define EBOOT -2
 static int ota_setup_partition_and_reboot() {
 	ESP_LOGI(TAG, "Total bytes read: %d", partition_data_written);
 
 	esp_err_t err = esp_ota_end(update_handle);
-
 	if (err != ESP_OK) {
-		if (err == ESP_ERR_OTA_VALIDATE_FAILED) 
+		if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
 			ESP_LOGE(TAG, "Image validation failed, image is corrupted/not-signed");
-		else 
+			return EIMG;
+		} else {
 			ESP_LOGE(TAG, "esp_ota_end failed (%s)!", esp_err_to_name(err));
-        
-		return -1;
+			return EBOOT;
+		}
 	}
 
 	err = esp_ota_set_boot_partition(update_partition);
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
-		return -1;
+		return EBOOT;
 	}
+
 	ESP_LOGI(TAG, "Prepare to restart system!");
-	vTaskDelay(4000 / portTICK_PERIOD_MS);
+	vTaskDelay(1000 / portTICK_PERIOD_MS);
 	esp_restart();
 
-	/* Probably unreachable */
+	/* Unreachable */
 	return -1; 
 }
 
@@ -141,15 +150,21 @@ static int ota_setup_partition_and_reboot() {
 #define RETRY_DELAY_MS 500
 #define MAX_RETRY_TIME_MS 5000
 
+#define ERECV   -2 /* Authorized, but failed to receive the entire binary */
+#define EAUTH   -1 /* Not authorized */
+#define RECV_OK  0 /* Successfully received the entire binary */
+
 static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
-	vTaskDelay(pdMS_TO_TICKS(1500));
+	vTaskDelay(pdMS_TO_TICKS(500));
 	ESP_LOGI(TAG, "Waiting for update..");
 	const int chunk = 64;
 	unsigned char rx_buffer[chunk];
 	int ret;
 	int total_sleep_time = 0;
-	bool verified = false;
 	bool ota_began = false;
+	uint32_t total_recv = 0;
+	uint32_t expected_recv = 0;
+	uint8_t expected_buf_nr_written = 0;
 
 	partition_data_written = 0;
 	while (1) {
@@ -157,20 +172,45 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 
 		ret = tls_next_chunk(ssl, rx_buffer);
 		if (!ret || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
-			if (!verified)
-				ret = -1;
-			else
-				ret = 0;
+			if (!total_recv) {
+				ret = EAUTH;
+			} else {
+				if (total_recv > sizeof(uint32_t) && total_recv - sizeof(uint32_t) == expected_recv)
+					return RECV_OK;
+				else
+					return ERECV;
+			}
 
 			break;
 		} else if (ret > 0) {
-			verified = true;
+			total_recv += ret;
+			total_sleep_time = 0;
+			uint8_t skip = 0;
+
+			/* the first 4 bytes represent to firmware length */
+			if (expected_buf_nr_written < sizeof(uint32_t)) {
+				uint8_t *dest = (uint8_t*)&expected_recv + expected_buf_nr_written;
+				uint8_t *src = (uint8_t*)&rx_buffer[0];
+				uint8_t n;
+
+				if (ret > sizeof(uint32_t) - expected_buf_nr_written)
+					n = sizeof(uint32_t) - expected_buf_nr_written;
+				else
+					n = ret;
+
+				memcpy(dest, src, n);
+				expected_buf_nr_written += n;
+				skip = n;
+			}
+
 			if (!ota_began) {
 				ota_process_begin();
 				ota_began = true;
 			}
-			total_sleep_time = 0;
-			ota_append_data_to_partition(rx_buffer, ret);
+
+			if (expected_buf_nr_written == sizeof(uint32_t) && ret > skip)
+				ota_append_data_to_partition(&rx_buffer[skip], ret - skip);
+
 			continue;
 		}
 
@@ -179,14 +219,12 @@ static int ota_write_partition_from_tls_stream(mbedtls_ssl_context *ssl) {
 			vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
 			total_sleep_time += RETRY_DELAY_MS;
 		} else {
-			ESP_LOGE(TAG, "Max retry time exceeded, aborting.");
-			ret = -1;
+			ESP_LOGE(TAG, "Max retry time exceeded.");
+			ret = ERECV;
 			break;
 		}
 	}
 	tls_kill_connection(ssl);
-	if (ret > 0)
-		ESP_LOGI(TAG, "Now all the data has been received");
 	return ret;
 }
 
@@ -309,6 +347,7 @@ esp_err_t ota_request_handler(httpd_req_t *req) {
 
 #define IP_LEN 16 + 1
 #define POST_BODY_LEN (IP_LEN + 4)
+char *ip = NULL;
 esp_err_t ota_request_handler_secure(httpd_req_t *req)
 {
 	char body[POST_BODY_LEN] = { 0 };
@@ -323,7 +362,11 @@ esp_err_t ota_request_handler_secure(httpd_req_t *req)
 		return ESP_FAIL;
 	}
 
-	char* ip = calloc(IP_LEN, 1);
+	if (!ip)
+		ip = calloc(IP_LEN, 1);
+	else
+		memset(ip, 0, IP_LEN);
+
 	sscanf(body, "ip: %s", ip);
 	ESP_LOGI(TAG, "OTA Agent IP: %s", ip);
 	const char resp[] = "Received update request: About to update (Secure)\n";
@@ -350,52 +393,68 @@ void ota_service_begin(char *ip) {
 #ifdef OTA_SECURE
 void ota_service_task_secure(void *pvParameters) {
 	char *server_ip = (char *) pvParameters;
-	uint8_t reconnect = 0;
-	uint8_t attempts = 0;
-
+	int ret;
 	unsigned char *cert;
 	int len	= get_dice_cert_ptr(&cert);
 	if (len <= 0) {
-		ESP_LOGE(TAG, "Could not generate the certificate");
+		ESP_LOGE(TAG, "Could not retrieve the certificate");
 		vTaskDelete(NULL);
 	}
+
 	#if DEBUG
 	print_base64_encoded((uint8_t*) cert, len);
 	#endif
 
+	for (;;) {
+		uint8_t reconnect = 0;
+		uint8_t attempts = 0;
 reconnect:
-	if (attempts++ >= MAX_ATTEMPTS) {
-		ESP_LOGE(TAG, "Reached max number of attempts to connect - aborting");
+		if (attempts++ >= MAX_ATTEMPTS) {
+			ESP_LOGE(TAG, "Reached max number of attempts to connect - aborting");
+			vTaskDelete(NULL);
+		}
+
+		if (reconnect) {
+			ESP_LOGI(TAG, "Waiting 4 seconds before trying again...");
+			vTaskDelay(4000 / portTICK_PERIOD_MS);
+		}
+		reconnect = 1;
+
+		if (tls_establish(&ssl, server_ip) < 0)
+			goto reconnect;
+
+		printf("Established connection with server\n");
+
+		vTaskDelay(500 / portTICK_PERIOD_MS);
+
+		if (tls_send_dice_cert(&ssl, (void *) cert, len) < 0) {
+			ESP_LOGW(TAG, "Could not send the certificate in the host, restarting the process");
+			vTaskDelay(2000 / portTICK_PERIOD_MS);
+			continue;
+		}
+
+		ret = ota_write_partition_from_tls_stream(&ssl);
+		if (ret != RECV_OK) {
+			if (ret == EAUTH) {
+				ESP_LOGE(TAG, "Not authorized, stop.");
+				vTaskDelete(NULL);
+			} else if (ret == ERECV) {
+				ESP_LOGW(TAG, "An error occured while downloading the firmware, restarting the process");
+				vTaskDelay(2000 / portTICK_PERIOD_MS);
+				continue;
+			}
+		}
+
+		ESP_LOGI(TAG, "Now all the data has been received");
+
+		ret = ota_setup_partition_and_reboot();
+		if (ret == EIMG) {
+			ESP_LOGE(TAG, "Failed to setup partition, the image is invalid, stop.");
+		} else if (ret == EBOOT) {
+			ESP_LOGE(TAG, "Failed to setup partition and reboot, stop.");
+		}
 		vTaskDelete(NULL);
 	}
-	if (reconnect) {
-		ESP_LOGI(TAG, "Waiting 4 seconds before trying again...");
-		vTaskDelay(4000 / portTICK_PERIOD_MS);
-	}
-	reconnect = 1;
-
-	if (tls_establish(&ssl, server_ip) < 0)
-		goto reconnect;
-
-	printf("Established connection with server\n");
-
-	vTaskDelay(500 / portTICK_PERIOD_MS);
-
-	if (tls_send_dice_cert(&ssl, (void *) cert, len) < 0) {
-		ESP_LOGE(TAG, "Could not send the certificate in the host");
-		vTaskDelete(NULL);
-	}
-
-	if (ota_write_partition_from_tls_stream(&ssl) < 0) {
-		ESP_LOGE(TAG, "Failed to update");
-		vTaskDelete(NULL);
-	}
-
-	if (ota_setup_partition_and_reboot()) {
-		ESP_LOGE(TAG, "Failed to setup partition and reboot");
-		vTaskDelete(NULL);
-	}
-	while (1) vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 #endif
 
