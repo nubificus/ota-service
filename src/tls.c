@@ -98,6 +98,8 @@ int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
 
     mbedtls_ssl_set_bio(ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
 
+    mbedtls_ssl_set_hostname(ssl, "ota-agent");
+
     ESP_LOGI(TAG, "Performing SSL handshake...");
     while ((ret = mbedtls_ssl_handshake(ssl)) != 0) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
