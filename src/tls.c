@@ -18,13 +18,13 @@ extern const uint8_t server_cert_pem_end[] asm("_binary_server_crt_end");
 
 const char *server_port = "4433";
 
+mbedtls_net_context server_fd;
 int tls_establish(mbedtls_ssl_context *ssl, char *server_ip) {
     if (ssl == NULL)
 	    return -1;
 
     const char *pers = "ssl_client";
     char err_buf[100];
-    mbedtls_net_context server_fd;
     mbedtls_ssl_config conf;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
