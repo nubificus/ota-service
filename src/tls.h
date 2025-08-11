@@ -1,25 +1,24 @@
-#pragma once
+#ifndef TLS_H
+#define TLS_H
 
-#ifdef OTA_SECURE
+#include "mbedtls/net_sockets.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/x509_crt.h"
 
-#ifndef __OTA_TLS_H__
-#define __OTA_TLS_H__
+typedef struct {
+    mbedtls_net_context net;
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config conf;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_x509_crt cacert;
+} tls_session_t;
 
-#include <mbedtls/ssl.h>
-#include <stddef.h>
+int tls_establish(tls_session_t *session, const char *server_ip);
+void tls_cleanup(tls_session_t *session);
+int tls_send_dice_cert(tls_session_t *session, void *cert, size_t len);
+int tls_safe_read(tls_session_t *session, unsigned char *buf, size_t len);
 
-int tls_establish(mbedtls_ssl_context *ssl, char *server_ip);
-
-int tls_send_dice_cert(mbedtls_ssl_context *ssl, void *cert, size_t len);
-
-void tls_kill_connection(mbedtls_ssl_context *ssl);
-
-int cert_ok(mbedtls_ssl_context *ssl); 
-
-int update_wait(mbedtls_ssl_context *ssl);
-
-int tls_next_chunk(mbedtls_ssl_context *ssl, unsigned char* buf);
-
-#endif
-
-#endif
+#endif /* TLS_H */

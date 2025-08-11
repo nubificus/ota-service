@@ -29,4 +29,10 @@ esp_err_t ota_request_handler(httpd_req_t *req);
 void ota_service_begin(char *ip);
 #endif
 
+#pragma once
+#include <stdbool.h>
+
+void set_ota_in_progress(bool v);
+bool is_ota_in_progress(void);
+
 #endif

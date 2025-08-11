@@ -25,7 +25,7 @@ void gen_dice_cert_task(void *pvParameters) {
 esp_err_t onboard_request_handler(httpd_req_t *req) {
 	if (len == 0) { /* if the certificate has not been generated */
 		BaseType_t result = xTaskCreate(gen_dice_cert_task, DESC, STACK,
-						NULL, 1, NULL);
+						NULL, 5, NULL);
 		if (result != pdPASS) {
 			printf("Could not create dice cert task.\n");
 			httpd_resp_set_status(req, "500 Internal Server Error");
