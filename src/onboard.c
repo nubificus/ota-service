@@ -14,11 +14,15 @@ static char cert_buf[1024] = { 0 };
 static int len = 0;
 
 void gen_dice_cert_task(void *pvParameters) {
+#ifdef OTA_SECURE
 	len = gen_dice_cert(cert_buf, sizeof(cert_buf));
 	if (len <= 0) {
 		printf("Could not generate the certificate");
 		len = -1;
 	}
+#else
+	len = -1;
+#endif
 	vTaskDelete(NULL);
 }
 
