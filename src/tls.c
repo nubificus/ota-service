@@ -4,7 +4,6 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
 #include "mbedtls/pk.h"
-#include "mbedtls/psa_util.h"
 #include "mbedtls/debug.h"
 #include "psa/crypto.h"
 #include "tls.h"
@@ -29,7 +28,6 @@ int tls_establish(tls_session_t *session, const char *server_ip) {
     if (!session) return -1;
     memset(session, 0, sizeof(*session));
 
-    const char *pers = "ssl_client";
     char err_buf[100];
 
     psa_crypto_init();
@@ -62,7 +60,6 @@ int tls_establish(tls_session_t *session, const char *server_ip) {
 
     mbedtls_ssl_conf_authmode(&session->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&session->conf, &session->cacert, NULL);
-    mbedtls_ssl_conf_rng(&session->conf, mbedtls_psa_get_random, MBEDTLS_PSA_RANDOM_STATE);
     mbedtls_ssl_conf_read_timeout(&session->conf, 500);
 
     ret = mbedtls_ssl_setup(&session->ssl, &session->conf);

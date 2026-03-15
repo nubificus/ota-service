@@ -26,19 +26,21 @@
 #include "dice/dice.h"
 #include "dice/ops.h"
 #include "dice/utils.h"
+/* IDF v6.0 / mbedtls 4.x: expose legacy private identifiers */
+#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
 #include "mbedtls/asn1.h"
 #include "mbedtls/asn1write.h"
 #include "mbedtls/bignum.h"
-#include "mbedtls/ecdsa.h"
 #include "mbedtls/ecp.h"
-#include "mbedtls/hkdf.h"
-#include "mbedtls/hmac_drbg.h"
+#include "mbedtls/private/hmac_drbg.h"
 #include "mbedtls/md.h"
 #include "mbedtls/oid.h"
 #include "mbedtls/pk.h"
+#include "mbedtls/private/pk_private.h"
 #include "mbedtls/x509.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/base64.h"
+#include "psa/crypto.h"
 
 #define DICE_MAX_CERTIFICATE_SIZE 2048
 #define DICE_MAX_EXTENSION_SIZE 2048
@@ -351,12 +353,38 @@ DiceResult DiceKdf(void* context_not_used, size_t length, const uint8_t* ikm,
                    size_t ikm_size, const uint8_t* salt, size_t salt_size,
                    const uint8_t* info, size_t info_size, uint8_t* output) {
   (void)context_not_used;
-  if (0 != mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA512), salt,
-                        salt_size, ikm, ikm_size, info, info_size, output,
-                        length)) {
-    return kDiceResultPlatformError;
+  psa_key_derivation_operation_t op = PSA_KEY_DERIVATION_OPERATION_INIT;
+  psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+  psa_key_id_t key;
+  psa_status_t status;
+
+  psa_set_key_type(&attr, PSA_KEY_TYPE_DERIVE);
+  psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+  psa_set_key_algorithm(&attr, PSA_ALG_HKDF(PSA_ALG_SHA_512));
+  status = psa_import_key(&attr, ikm, ikm_size, &key);
+  if (status != PSA_SUCCESS) return kDiceResultPlatformError;
+
+  status = psa_key_derivation_setup(&op, PSA_ALG_HKDF(PSA_ALG_SHA_512));
+  if (status != PSA_SUCCESS) goto cleanup;
+
+  if (salt_size > 0) {
+    status = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_SALT,
+                                            salt, salt_size);
+    if (status != PSA_SUCCESS) goto cleanup;
   }
-  return kDiceResultOk;
+  status = psa_key_derivation_input_key(&op, PSA_KEY_DERIVATION_INPUT_SECRET,
+                                        key);
+  if (status != PSA_SUCCESS) goto cleanup;
+
+  status = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_INFO,
+                                          info, info_size);
+  if (status != PSA_SUCCESS) goto cleanup;
+
+  status = psa_key_derivation_output_bytes(&op, output, length);
+cleanup:
+  psa_key_derivation_abort(&op);
+  psa_destroy_key(key);
+  return (status == PSA_SUCCESS) ? kDiceResultOk : kDiceResultPlatformError;
 }
 
 DiceResult DiceGenerateCertificate(
@@ -518,20 +546,10 @@ DiceResult DiceGenerateCertificate(
     result = kDiceResultPlatformError;
     goto out;
   }
-  // This implementation is deterministic and assumes entropy is not available.
-  // If this code is run where entropy is available, however, f_rng and p_rng
-  // should be set to use that entropy. As is, we'll provide a DRBG for blinding
-  // but it will be ineffective.
-  mbedtls_hmac_drbg_context drbg;
-  mbedtls_hmac_drbg_init(&drbg);
-  mbedtls_hmac_drbg_seed_buf(&drbg,
-                             mbedtls_md_info_from_type(MBEDTLS_MD_SHA512),
-                             subject_key_id, subject_key_id_size);
+  /* In mbedtls 4.x (IDF v6.0) RNG is handled internally via PSA Crypto. */
   uint8_t tmp_buffer[DICE_MAX_CERTIFICATE_SIZE];
   int length_or_error =
-      mbedtls_x509write_crt_der(&cert_context, tmp_buffer, sizeof(tmp_buffer),
-                                mbedtls_hmac_drbg_random, &drbg);
-  mbedtls_hmac_drbg_free(&drbg);
+      mbedtls_x509write_crt_der(&cert_context, tmp_buffer, sizeof(tmp_buffer));
   if (length_or_error < 0) {
     result = kDiceResultPlatformError;
     goto out;

@@ -172,6 +172,7 @@ static void dice_config(DiceInputValues *input_values) {
 		if (dice_config_v2(input_values) == 0)
 			break;
 		printf("Secure Boot V2 DICE Configuarion failed..\n");
+		/* fallthrough */
 	case SECURE_BOOT_NONE:
 		printf("Configuring DICE configuration without hashes\n");
 		dice_config_none(input_values);
@@ -201,9 +202,7 @@ int gen_dice_cert(void *buf, size_t max_len) {
 	uint8_t uds_buffer[DICE_PRIVATE_KEY_SEED_SIZE];
 	uint8_t mac_addr[6];
 
-	char version[16] = { 0 };
-	mbedtls_version_get_string(version);
-	printf("mbedtls version: %s\n", version);
+	printf("mbedtls version: %s\n", mbedtls_version_get_string());
 
 	psa_status_t status = psa_crypto_init();
 	if (status != PSA_SUCCESS) {
