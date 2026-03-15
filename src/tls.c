@@ -4,9 +4,9 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/error.h"
 #include "mbedtls/pk.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/psa_util.h"
 #include "mbedtls/debug.h"
+#include "psa/crypto.h"
 #include "tls.h"
 #include "esp_log.h"
 #include <lwip/sockets.h>
@@ -32,23 +32,14 @@ int tls_establish(tls_session_t *session, const char *server_ip) {
     const char *pers = "ssl_client";
     char err_buf[100];
 
+    psa_crypto_init();
+
     mbedtls_net_init(&session->net);
     mbedtls_ssl_init(&session->ssl);
     mbedtls_ssl_config_init(&session->conf);
-    mbedtls_entropy_init(&session->entropy);
-    mbedtls_ctr_drbg_init(&session->ctr_drbg);
     mbedtls_x509_crt_init(&session->cacert);
 
-    int ret = mbedtls_ctr_drbg_seed(&session->ctr_drbg, mbedtls_entropy_func,
-                                    &session->entropy, (const unsigned char *) pers,
-                                    strlen(pers));
-    if (ret != 0) {
-        mbedtls_strerror(ret, err_buf, sizeof(err_buf));
-        ESP_LOGE(TAG, "Failed to seed RNG: %s", err_buf);
-        return -1;
-    }
-
-    ret = mbedtls_x509_crt_parse(&session->cacert, server_cert_pem_start,
+    int ret = mbedtls_x509_crt_parse(&session->cacert, server_cert_pem_start,
                                  server_cert_pem_end - server_cert_pem_start);
     if (ret < 0) {
         mbedtls_strerror(ret, err_buf, sizeof(err_buf));
@@ -71,7 +62,7 @@ int tls_establish(tls_session_t *session, const char *server_ip) {
 
     mbedtls_ssl_conf_authmode(&session->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&session->conf, &session->cacert, NULL);
-    mbedtls_ssl_conf_rng(&session->conf, mbedtls_ctr_drbg_random, &session->ctr_drbg);
+    mbedtls_ssl_conf_rng(&session->conf, mbedtls_psa_get_random, MBEDTLS_PSA_RANDOM_STATE);
     mbedtls_ssl_conf_read_timeout(&session->conf, 500);
 
     ret = mbedtls_ssl_setup(&session->ssl, &session->conf);
@@ -126,8 +117,6 @@ void tls_cleanup(tls_session_t *session) {
     mbedtls_x509_crt_free(&session->cacert);
     mbedtls_ssl_free(&session->ssl);
     mbedtls_ssl_config_free(&session->conf);
-    mbedtls_ctr_drbg_free(&session->ctr_drbg);
-    mbedtls_entropy_free(&session->entropy);
     memset(session, 0, sizeof(*session));
 }
 #define RETRY_DELAY_MS 500

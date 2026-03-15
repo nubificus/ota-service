@@ -1,3 +1,10 @@
+#include <stdbool.h>
+
+static volatile bool ota_in_progress = false;
+
+void set_ota_in_progress(bool v) { ota_in_progress = v; }
+bool is_ota_in_progress(void) { return ota_in_progress; }
+
 #ifdef OTA_SECURE
 
 #include "tls.h"
@@ -6,10 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "esp_log.h"
 
-#include <stdbool.h>
 #include "esp_err.h"
 #include "esp_http_server.h"
 
@@ -24,11 +28,6 @@ static int ota_process_begin();
 static const char *TAG = "ota";
 
 #define MAX_ATTEMPTS 20
-
-static volatile bool ota_in_progress = false;
-
-void set_ota_in_progress(bool v) { ota_in_progress = v; }
-bool is_ota_in_progress(void) { return ota_in_progress; }
 
 
 static int ota_setup_partition_and_reboot();
@@ -107,6 +106,9 @@ static int ota_write_partition_from_tls_stream(tls_session_t *session) {
 
 #endif
 
+#include "esp_err.h"
+#include "esp_http_server.h"
+
 #ifdef OTA_SECURE
 
 esp_err_t ota_request_handler_secure(httpd_req_t *req);
@@ -114,8 +116,11 @@ void ota_service_task_secure (void *pvParameters);
 
 #else
 
-esp_err_t ota_request_handler_insecure(httpd_req_t *req);
-void ota_service_task_insecure (void *pvParameters);
+esp_err_t ota_request_handler_insecure(httpd_req_t *req) {
+    httpd_resp_set_status(req, "501 Not Implemented");
+    httpd_resp_send(req, "OTA not available (OTA_SECURE not enabled)", 42);
+    return ESP_OK;
+}
 
 #endif
 
@@ -179,6 +184,7 @@ void ota_service_begin(char *ip) {
 }
 #endif
 
+#ifdef OTA_SECURE
 static int ota_process_begin() {
        update_partition = esp_ota_get_next_update_partition(NULL);
        assert(update_partition != NULL);
@@ -199,6 +205,7 @@ static int ota_process_begin() {
        ESP_LOGI(TAG, "esp_ota_begin succeeded");
        return ESP_OK;
 }
+#endif
 
 #ifdef OTA_SECURE
 void ota_service_task_secure(void *pvParameters) {
@@ -256,6 +263,9 @@ void ota_service_task_secure(void *pvParameters) {
 }
 #endif
 
+#ifdef OTA_SECURE
+#include "esp_system.h"
+
 static int ota_append_data_to_partition(unsigned char* data, size_t len) {
 	int ret = 0;
 	ret = esp_ota_write(update_handle, (const void*) data, len);
@@ -297,3 +307,4 @@ static int ota_setup_partition_and_reboot() {
        /* Probably unreachable */
        return -1;
 }
+#endif

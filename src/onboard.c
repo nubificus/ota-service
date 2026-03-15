@@ -2,9 +2,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ota-service.h"
-#include "dice_cert.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
+
+#ifdef OTA_SECURE
+
+#include "dice_cert.h"
 
 #define STACK (16 * 1024)
 #define DESC "Dice attestation certificate"
@@ -49,3 +52,13 @@ esp_err_t onboard_request_handler(httpd_req_t *req) {
 	httpd_resp_send(req, cert_buf, len);
 	return ESP_OK;
 }
+
+#else
+
+esp_err_t onboard_request_handler(httpd_req_t *req) {
+	httpd_resp_set_status(req, "501 Not Implemented");
+	httpd_resp_send(req, "Onboarding not available (OTA_SECURE not enabled)", 49);
+	return ESP_OK;
+}
+
+#endif

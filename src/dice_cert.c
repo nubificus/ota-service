@@ -20,10 +20,9 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/esp_debug.h"
 #include "mbedtls/ssl.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/ctr_drbg.h"
 #include "mbedtls/error.h"
 #include "mbedtls/version.h"
+#include "psa/crypto.h"
 
 #include "esp_crt_bundle.h"
 #include "esp_flash.h"
@@ -202,30 +201,15 @@ int gen_dice_cert(void *buf, size_t max_len) {
 	uint8_t uds_buffer[DICE_PRIVATE_KEY_SEED_SIZE];
 	uint8_t mac_addr[6];
 
-	mbedtls_entropy_context entropy;
-	mbedtls_ctr_drbg_context ctr_drbg;
-
 	char version[16] = { 0 };
 	mbedtls_version_get_string(version);
 	printf("mbedtls version: %s\n", version);
 
-#ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 	psa_status_t status = psa_crypto_init();
 	if (status != PSA_SUCCESS) {
 		ESP_LOGE(TAG, "Failed to initialize PSA crypto, returned %d",
 			 (int) status);
-		return;
-	}
-#endif
-
-	mbedtls_ctr_drbg_init(&ctr_drbg);
-	ESP_LOGI(TAG, "Seeding the random number generator");
-
-	mbedtls_entropy_init(&entropy);
-	if((ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func,
-					&entropy, NULL, 0)) != 0) {
-		ESP_LOGE(TAG, "mbedtls_ctr_drbg_seed returned %d", ret);
-		abort();
+		return -1;
 	}
 
 	esp_read_mac(mac_addr, ESP_MAC_WIFI_STA);
