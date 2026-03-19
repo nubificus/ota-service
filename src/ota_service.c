@@ -1,14 +1,3 @@
-#include <stdbool.h>
-
-static volatile bool ota_in_progress = false;
-
-void set_ota_in_progress(bool v) { ota_in_progress = v; }
-bool is_ota_in_progress(void) { return ota_in_progress; }
-
-#ifdef OTA_SECURE
-
-#include "tls.h"
-#include "dice_cert.h"
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
