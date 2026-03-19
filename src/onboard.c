@@ -16,6 +16,7 @@
 static char cert_buf[1024] = { 0 };
 static int len = 0;
 
+#ifdef OTA_SECURE
 void gen_dice_cert_task(void *pvParameters) {
 #ifdef OTA_SECURE
 	len = gen_dice_cert(cert_buf, sizeof(cert_buf));
@@ -28,8 +29,10 @@ void gen_dice_cert_task(void *pvParameters) {
 #endif
 	vTaskDelete(NULL);
 }
+#endif
 
 esp_err_t onboard_request_handler(httpd_req_t *req) {
+#ifdef OTA_SECURE
 	if (len == 0) { /* if the certificate has not been generated */
 		BaseType_t result = xTaskCreate(gen_dice_cert_task, DESC, STACK,
 						NULL, 5, NULL);
@@ -51,6 +54,10 @@ esp_err_t onboard_request_handler(httpd_req_t *req) {
 
 	httpd_resp_send(req, cert_buf, len);
 	return ESP_OK;
+#else
+	httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA_SECURE not enabled");
+	return ESP_FAIL;
+#endif
 }
 
 #else

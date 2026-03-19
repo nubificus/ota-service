@@ -13,19 +13,28 @@ bool is_ota_in_progress(void) { return ota_in_progress; }
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-
+#include <stdbool.h>
 #include "esp_err.h"
 #include "esp_http_server.h"
 
-#define STACK_SIZE 16 * 1024
-
-// Add this global static variable if not declared:
 static size_t partition_data_written = 0;
 static const esp_partition_t* update_partition = NULL;
 static esp_ota_handle_t update_handle = 0;
 static int ota_process_begin();
 
 static const char *TAG = "ota";
+
+static volatile bool ota_in_progress = false;
+
+void set_ota_in_progress(bool v) { ota_in_progress = v; }
+bool is_ota_in_progress(void) { return ota_in_progress; }
+
+#ifdef OTA_SECURE
+
+#include "tls.h"
+#include "dice_cert.h"
+
+#define STACK_SIZE 16 * 1024
 
 #define MAX_ATTEMPTS 20
 
@@ -117,9 +126,14 @@ void ota_service_task_secure (void *pvParameters);
 #else
 
 esp_err_t ota_request_handler_insecure(httpd_req_t *req) {
-    httpd_resp_set_status(req, "501 Not Implemented");
-    httpd_resp_send(req, "OTA not available (OTA_SECURE not enabled)", 42);
-    return ESP_OK;
+    ESP_LOGE(TAG, "Insecure OTA not implemented");
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA_SECURE not enabled");
+    return ESP_FAIL;
+}
+
+void ota_service_task_insecure(void *pvParameters) {
+    ESP_LOGE(TAG, "Insecure OTA task not implemented");
+    vTaskDelete(NULL);
 }
 
 #endif
