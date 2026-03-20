@@ -26,8 +26,10 @@
 #include "dice/dice.h"
 #include "dice/ops.h"
 #include "dice/utils.h"
-/* IDF v6.0 / mbedtls 4.x: expose legacy private identifiers */
-#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
+/* IDF v6.0 / mbedtls 4.x: allow access to private struct members and expose
+ * internal declarations (pk_internal.h, hmac_drbg private fields, etc.). */
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS
+#include "pk_internal.h"
 #include "mbedtls/asn1.h"
 #include "mbedtls/asn1write.h"
 #include "mbedtls/bignum.h"
@@ -72,30 +74,62 @@ void print_base64_encoded(uint8_t *data, size_t len) {
 static DiceResult SetupKeyPair(
     const uint8_t private_key_seed[DICE_PRIVATE_KEY_SEED_SIZE],
     mbedtls_pk_context* context) {
-  if (0 !=
-      mbedtls_pk_setup(context, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY))) {
+  // In mbedtls 4.x (IDF v6.0) EC keys are backed by PSA; pk_ctx is always
+  // NULL and mbedtls_pk_ec() always returns NULL.  Generate the key
+  // deterministically in a standalone keypair, export the raw private scalar,
+  // then load it into the pk_context via the internal PSA-import helpers.
+  if (0 != mbedtls_pk_setup(context,
+                             mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY))) {
     return kDiceResultPlatformError;
   }
+  if (0 != mbedtls_pk_ecc_set_group(context, MBEDTLS_ECP_DP_SECP256R1)) {
+    return kDiceResultPlatformError;
+  }
+
+  DiceResult result = kDiceResultOk;
+  mbedtls_ecp_keypair keypair;
+  mbedtls_ecp_keypair_init(&keypair);
+  mbedtls_hmac_drbg_context rng_context;
+  mbedtls_hmac_drbg_init(&rng_context);
+
   // Use the |private_key_seed| directly to seed a PRNG which is then in turn
   // used to generate the private key. This implementation uses HMAC_DRBG in a
   // loop with no reduction, like RFC6979.
-  DiceResult result = kDiceResultOk;
-  mbedtls_hmac_drbg_context rng_context;
-  mbedtls_hmac_drbg_init(&rng_context);
   if (0 != mbedtls_hmac_drbg_seed_buf(
                &rng_context, mbedtls_md_info_from_type(MBEDTLS_MD_SHA512),
                private_key_seed, DICE_PRIVATE_KEY_SEED_SIZE)) {
     result = kDiceResultPlatformError;
     goto out;
   }
-  if (0 != mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1,
-                               mbedtls_pk_ec(*context),
+  if (0 != mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, &keypair,
                                mbedtls_hmac_drbg_random, &rng_context)) {
     result = kDiceResultPlatformError;
     goto out;
   }
 
+  // Export raw 32-byte private scalar and import into the PSA-backed context.
+  {
+    uint8_t priv_key[32];
+    if (0 != mbedtls_mpi_write_binary(&keypair.MBEDTLS_PRIVATE(d),
+                                      priv_key, sizeof(priv_key))) {
+      result = kDiceResultPlatformError;
+      goto out;
+    }
+    if (0 != mbedtls_pk_ecc_set_key(context, priv_key, sizeof(priv_key))) {
+      result = kDiceResultPlatformError;
+      goto out;
+    }
+    // Populate pub_raw from the PSA key so that pk_write_ec_pubkey can read it.
+    // For MBEDTLS_PK_ECKEY (non-OPAQUE), pkwrite.c reads pub_raw directly.
+    if (0 != mbedtls_pk_ecc_set_pubkey_from_prv(context, priv_key,
+                                                 sizeof(priv_key))) {
+      result = kDiceResultPlatformError;
+      goto out;
+    }
+  }
+
 out:
+  mbedtls_ecp_keypair_free(&keypair);
   mbedtls_hmac_drbg_free(&rng_context);
   return result;
 }
@@ -103,17 +137,21 @@ out:
 static DiceResult GetIdFromKey(void* context,
                                const mbedtls_pk_context* pk_context,
                                uint8_t id[DICE_ID_SIZE]) {
-  uint8_t raw_public_key[33];
-  size_t raw_public_key_size = 0;
-  mbedtls_ecp_keypair* key = mbedtls_pk_ec(*pk_context);
-
-  if (0 != mbedtls_ecp_point_write_binary(
-               &key->MBEDTLS_PRIVATE(grp), &key->MBEDTLS_PRIVATE(Q), MBEDTLS_ECP_PF_COMPRESSED,
-               &raw_public_key_size, raw_public_key, sizeof(raw_public_key))) {
+  // In mbedtls 4.x EC keys are stored as PSA keys; export the public key via
+  // PSA (returns 65-byte uncompressed secp256r1 point: 0x04 || X || Y), then
+  // compress to the 33-byte form (0x02/0x03 || X) expected by DICE.
+  uint8_t pub_raw[65];
+  size_t pub_raw_len = 0;
+  if (PSA_SUCCESS != psa_export_public_key(
+          pk_context->MBEDTLS_PRIVATE(priv_id),
+          pub_raw, sizeof(pub_raw), &pub_raw_len) ||
+      pub_raw_len != 65 || pub_raw[0] != 0x04) {
     return kDiceResultPlatformError;
   }
-  return DiceDeriveCdiCertificateId(context, raw_public_key,
-                                    raw_public_key_size, id);
+  uint8_t compressed[33];
+  compressed[0] = (pub_raw[64] & 1) ? 0x03 : 0x02;
+  memcpy(compressed + 1, pub_raw + 1, 32);
+  return DiceDeriveCdiCertificateId(context, compressed, sizeof(compressed), id);
 }
 
 // 54 byte name is prefix (13), hex id (40), and a null terminator.
